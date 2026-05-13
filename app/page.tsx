@@ -173,18 +173,7 @@ export default async function DashboardPage() {
         />
         <StatTile
           label="Runway"
-          value={
-            isProfitable ? (
-              <span className="inline-flex items-baseline gap-2">
-                <span>∞</span>
-                <span className="text-[11px] uppercase tracking-[0.16em] text-gain bg-gain-tint border border-gain-soft rounded-[3px] px-1.5 py-0.5 leading-none">
-                  Profitable
-                </span>
-              </span>
-            ) : (
-              `${runway.toFixed(1)} mo`
-            )
-          }
+          value={isProfitable ? "∞" : `${runway.toFixed(1)} mo`}
           accent={
             isProfitable ? "gain" : runway < 6 ? "loss" : "gain"
           }

@@ -1,5 +1,6 @@
 "use client";
 
+import { useSyncExternalStore } from "react";
 import {
   Bar,
   CartesianGrid,
@@ -13,6 +14,10 @@ import {
 
 import { formatMoney, formatMoneyCompact } from "@/lib/money";
 import { monthLabel } from "@/lib/date";
+
+const subscribeNoop = () => () => {};
+const getSnapshotClient = () => true;
+const getSnapshotServer = () => false;
 
 export interface MonthlyChartDatum {
   month: string;
@@ -87,8 +92,15 @@ export function MonthlyChart({
     label: monthLabel(d.month),
   }));
 
+  const mounted = useSyncExternalStore(
+    subscribeNoop,
+    getSnapshotClient,
+    getSnapshotServer
+  );
+
   return (
     <div style={{ width: "100%", height }}>
+      {mounted && (
       <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
         <ComposedChart
           data={chartData}
@@ -169,6 +181,7 @@ export function MonthlyChart({
           />
         </ComposedChart>
       </ResponsiveContainer>
+      )}
     </div>
   );
 }
