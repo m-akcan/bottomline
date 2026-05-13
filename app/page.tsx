@@ -1,65 +1,280 @@
-import Image from "next/image";
+import { Card } from "@/components/ui/Card";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { LinkButton } from "@/components/ui/Button";
+import { StatTile } from "@/components/dashboard/StatTile";
+import { MonthlyChart } from "@/components/dashboard/MonthlyChart";
+import { CategoryBreakdown } from "@/components/dashboard/CategoryBreakdown";
+import { RunwayBar } from "@/components/dashboard/RunwayBar";
+import { ProjectCard } from "@/components/dashboard/ProjectCard";
+import { Sparkline } from "@/components/dashboard/Sparkline";
 
-export default function Home() {
+import { listProjects } from "@/lib/queries/projects";
+import {
+  listAllRecurringRules,
+  listCategories,
+  listEntries,
+} from "@/lib/queries/entries";
+import { materializeRecurring } from "@/lib/queries/materialize";
+import { getSettings } from "@/lib/settings";
+import {
+  burnRate,
+  categoryBreakdown,
+  lifetimeTotals,
+  monthlySeries,
+  mrrFallback,
+  mrrFromRules,
+  netBurnRate,
+  runwayMonths,
+  ytdNet,
+} from "@/lib/metrics";
+import { trailingMonthRange } from "@/lib/date";
+
+export default async function DashboardPage() {
+  // Idempotently materialize anything past-due, then read fresh state.
+  materializeRecurring();
+
+  const settings = getSettings();
+  const projects = listProjects();
+  const allRules = listAllRecurringRules();
+  const allEntries = listEntries({ limit: 5000 });
+  const categories = listCategories();
+
+  if (projects.length === 0) {
+    return (
+      <EmptyState
+        title="No projects yet"
+        description="Start by adding your first project — anything you ship that has costs or earnings."
+        action={
+          <LinkButton href="/projects/new" variant="primary">
+            Add a project
+          </LinkButton>
+        }
+      />
+    );
+  }
+
+  const baseCurrency = settings.baseCurrency;
+  const range = trailingMonthRange(12);
+  const series = monthlySeries(allEntries, range, baseCurrency);
+
+  const mrrRules = mrrFromRules(allRules, baseCurrency);
+  const mrrComputed = mrrRules > 0 ? mrrRules : mrrFallback(allEntries, baseCurrency);
+  const burn = burnRate(allEntries, 3, baseCurrency);
+  const netBurn = netBurnRate(allEntries, 3, baseCurrency);
+  const runway = runwayMonths(settings.cashOnHandCents, netBurn);
+  const isProfitable = netBurn <= 0;
+  const ytd = ytdNet(allEntries, baseCurrency);
+  const totals = lifetimeTotals(allEntries, baseCurrency);
+
+  // Last month vs prior delta on net
+  const last = series[series.length - 1];
+  const prior = series[series.length - 2];
+  const netDelta = last && prior ? last.netCents - prior.netCents : 0;
+
+  // Sparkline values from net series
+  const netSpark = series.map((s) => s.netCents);
+  const mrrSpark = series.map((s) => s.incomeCents);
+
+  // Category breakdowns over trailing 12 months — income and expense sides.
+  const categoryById = new Map(categories.map((c) => [c.id, c]));
+  const fallbackPalette = [
+    "var(--color-cat-1)",
+    "var(--color-cat-2)",
+    "var(--color-cat-3)",
+    "var(--color-cat-4)",
+    "var(--color-cat-5)",
+    "var(--color-cat-6)",
+    "var(--color-cat-7)",
+    "var(--color-cat-8)",
+  ];
+  const dressSlices = (
+    raw: ReturnType<typeof categoryBreakdown>,
+    incomeFallbacks = false
+  ) =>
+    raw.map((s, i) => {
+      const cat = s.categoryId ? categoryById.get(s.categoryId) : null;
+      return {
+        id: s.categoryId,
+        name:
+          cat?.name ??
+          (incomeFallbacks ? "Uncategorized income" : "Uncategorized"),
+        color: cat?.color ?? fallbackPalette[i % fallbackPalette.length],
+        totalCents: s.totalCents,
+        fraction: s.fraction,
+      };
+    });
+  const expenseSlices = dressSlices(
+    categoryBreakdown(allEntries, baseCurrency, "expense")
+  );
+  const incomeSlices = dressSlices(
+    categoryBreakdown(allEntries, baseCurrency, "income"),
+    true
+  );
+
+  // Per-project mini stats
+  const perProject = projects.map((p) => {
+    const projEntries = allEntries.filter((e) => e.projectId === p.id);
+    const projRules = allRules.filter((r) => r.projectId === p.id);
+    const projMrr =
+      mrrFromRules(projRules, baseCurrency) ||
+      mrrFallback(projEntries, baseCurrency);
+    const projBurn = burnRate(projEntries, 3, baseCurrency);
+    const projYtd = ytdNet(projEntries, baseCurrency);
+    return {
+      project: p,
+      mrrCents: projMrr,
+      burnCents: projBurn,
+      ytdNetCents: projYtd,
+    };
+  });
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <div className="flex flex-col gap-8">
+      <header className="flex flex-col gap-2">
+        <span className="text-[11px] uppercase tracking-[0.18em] text-muted">
+          Bottomline · {new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" })}
+        </span>
+        <h1 className="text-3xl sm:text-4xl tracking-tight font-medium">
+          The portfolio, at a glance.
+        </h1>
+        <p className="text-sm text-muted max-w-xl">
+          Aggregate view across all {projects.length} project{projects.length === 1 ? "" : "s"}.
+          Numbers shown in {baseCurrency}; entries in other currencies are converted at the
+          configured rate.
+        </p>
+      </header>
+
+      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <StatTile
+          label="Net · year to date"
+          valueCents={ytd}
+          accent={ytd >= 0 ? "gain" : "loss"}
+          delta={netDelta}
+          deltaSuffix="mo/mo"
+          caption="Income minus expenses, current year"
+          currency={baseCurrency}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+        <StatTile
+          label="MRR · monthly recurring"
+          valueCents={mrrComputed}
+          accent="olive"
+          caption={
+            mrrRules > 0 ? "From active recurring income rules" : "Estimated from last month"
+          }
+          currency={baseCurrency}
+          trailing={<Sparkline values={mrrSpark} tone="olive" />}
+        />
+        <StatTile
+          label="Burn · 3-mo average"
+          valueCents={burn}
+          accent="loss"
+          caption="Average monthly expense"
+          currency={baseCurrency}
+        />
+        <StatTile
+          label="Runway"
+          value={
+            isProfitable ? (
+              <span className="inline-flex items-baseline gap-2">
+                <span>∞</span>
+                <span className="text-[11px] uppercase tracking-[0.16em] text-gain bg-gain-tint border border-gain-soft rounded-[3px] px-1.5 py-0.5 leading-none">
+                  Profitable
+                </span>
+              </span>
+            ) : (
+              `${runway.toFixed(1)} mo`
+            )
+          }
+          accent={
+            isProfitable ? "gain" : runway < 6 ? "loss" : "gain"
+          }
+          format="number"
+          caption={
+            isProfitable
+              ? `Net burn is negative — making ${(
+                  -netBurn / 100
+                ).toLocaleString("en-US", {
+                  style: "currency",
+                  currency: baseCurrency,
+                })}/mo`
+              : `Cash on hand: ${(settings.cashOnHandCents / 100).toLocaleString(
+                  "en-US",
+                  { style: "currency", currency: baseCurrency }
+                )} · burns ${(netBurn / 100).toLocaleString("en-US", {
+                  style: "currency",
+                  currency: baseCurrency,
+                })}/mo net`
+          }
+          trailing={<RunwayBar months={runway} className="w-32" />}
+        />
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <Card
+          tabbed
+          eyebrow="Trailing 12 months"
+          title="Income, expense & net"
+        >
+          <MonthlyChart data={series} currency={baseCurrency} />
+        </Card>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <Card
+            eyebrow="Trailing 12 months"
+            title="Where the money comes from"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+            <CategoryBreakdown slices={incomeSlices} currency={baseCurrency} />
+          </Card>
+          <Card eyebrow="Trailing 12 months" title="Where the money goes">
+            <CategoryBreakdown slices={expenseSlices} currency={baseCurrency} />
+          </Card>
+        </div>
+      </section>
+
+      <section className="flex flex-col gap-4">
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-xl tracking-tight">Projects</h2>
+          <LinkButton href="/projects/new" variant="ghost" size="sm">
+            + New project
+          </LinkButton>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {perProject.map((p) => (
+            <ProjectCard
+              key={p.project.id}
+              project={p.project}
+              mrrCents={p.mrrCents}
+              burnCents={p.burnCents}
+              ytdNetCents={p.ytdNetCents}
+              currency={baseCurrency}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+          ))}
         </div>
-      </main>
+      </section>
+
+      <section className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <StatTile
+          label="Lifetime income"
+          valueCents={totals.incomeCents}
+          accent="gain"
+          format="money"
+          currency={baseCurrency}
+        />
+        <StatTile
+          label="Lifetime expense"
+          valueCents={totals.expenseCents}
+          accent="loss"
+          format="money"
+          currency={baseCurrency}
+        />
+        <StatTile
+          label="Lifetime net"
+          valueCents={totals.netCents}
+          accent={totals.netCents >= 0 ? "gain" : "loss"}
+          format="money"
+          currency={baseCurrency}
+          trailing={<Sparkline values={netSpark} tone={totals.netCents >= 0 ? "gain" : "loss"} />}
+        />
+      </section>
     </div>
   );
 }
