@@ -21,6 +21,7 @@ function createDb(): { db: DbClient; sqlite: Database.Database } {
   }
 
   const sqlite = new Database(dbPath);
+  sqlite.pragma("busy_timeout = 5000");
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("foreign_keys = ON");
 
