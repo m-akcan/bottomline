@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: bottomline:latest
+    image: ghcr.io/m-akcan/bottomline:latest
     container_name: bottomline
     restart: unless-stopped
     ports:
